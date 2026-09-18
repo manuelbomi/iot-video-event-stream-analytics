@@ -25,6 +25,15 @@ services:
       mosquitto:
         condition: service_healthy
 
+  dashboard-ui:
+    build: ./frontend
+    container_name: iot-video-dashboard-ui
+    ports:
+      - "8089:80"
+    depends_on:
+      dashboard:
+        condition: service_started
+
   processor:
     build: .
     container_name: iot-video-processor
@@ -54,7 +63,7 @@ services:
         "--zones", "zone-1,zone-2,zone-3",
         "--spike-zone", "zone-2",
         "--spike-at", "30",
-        "--spike-magnitude", "8",
+        "--spike-magnitude", "12",
       ]
     depends_on:
       mosquitto:

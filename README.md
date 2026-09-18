@@ -111,16 +111,17 @@ Requirements: Docker and Docker Compose.
 docker compose up -d --build
 ```
 
-This starts four containers:
+This starts five containers:
 
-| Service     | What it does                                                                 |
-|-------------|-------------------------------------------------------------------------------|
-| `mosquitto` | The MQTT broker all the other services talk through.                        |
-| `producer`  | Publishes synthetic per-zone occupancy events, with a spike injected into `zone-2` at 30 seconds in, for demo purposes. |
-| `processor` | Consumes events, keeps rolling stats + anomaly detection per zone, POSTs alerts to the dashboard's webhook. |
-| `dashboard` | FastAPI + WebSocket UI showing live occupancy, rolling stats, and alerts.    |
+| Service        | What it does                                                                 |
+|-----------------|-------------------------------------------------------------------------------|
+| `mosquitto`     | The MQTT broker all the other services talk through.                        |
+| `producer`      | Publishes synthetic per-zone occupancy events, with a spike injected into `zone-2` at 30 seconds in, for demo purposes. |
+| `processor`     | Consumes events, keeps rolling stats + anomaly detection per zone, POSTs alerts to the dashboard's webhook. |
+| `dashboard`     | FastAPI + WebSocket backend showing live occupancy, rolling stats, and alerts (plain built-in HTML page). |
+| `dashboard-ui`  | The React + TypeScript dashboard (see [Live Dashboard](#live-dashboard) below), served by nginx and reverse-proxying `/api` and `/ws` to `dashboard`. |
 
-Once it's up, open **http://localhost:8088/** in a browser to watch the numbers update live, and watch `docker compose logs -f processor` to see anomaly detections as they happen (the injected spike in `zone-2` around the 30-second mark should trigger several).
+Once it's up, open **http://localhost:8089/** in a browser for the React dashboard (or **http://localhost:8088/** for the backend's own minimal built-in HTML page), and watch `docker compose logs -f processor` to see anomaly detections as they happen (the injected spike in `zone-2` around the 30-second mark should trigger several).
 
 Useful endpoints on the dashboard:
 
@@ -145,6 +146,30 @@ python -m src.producer.simulate_events --rate 2 --spike-zone zone-2 --spike-at 2
 python -m src.processor.stream_processor --webhook-url http://localhost:8000/alerts
 uvicorn src.dashboard.api:app --reload
 ```
+
+## Live Dashboard
+
+![Zone Occupancy Dashboard, showing zone-2 flagged as anomalous after an injected occupancy spike](docs/screenshots/occupancy-dashboard.png)
+
+`frontend/` is a Vite + React + TypeScript viewer for the same live data the built-in `GET /` HTML page shows, connecting to the backend's existing `WS /ws` endpoint (`src/dashboard/api.py`) with no changes to the WebSocket message format. Each zone gets a card with its current occupancy, rolling Welford mean/std, and a live line chart of recent occupancy; the moment the processor's Z-score detector (`src/processor/anomaly.py`) flags a zone as anomalous, that zone's card turns amber/red with an "ANOMALY" badge, the offending reading is marked on its chart, and an "active alerts" banner at the top lists every zone currently in that state. The screenshot above was captured live: `zone-2` is highlighted red after the demo producer's injected spike (`--spike-zone zone-2`) pushed its occupancy far enough above its own recent history for the anomaly detector to fire (`|z|=5.29`), and the "Recent alerts" table shows that exact detection alongside the reading that triggered it.
+
+**Run it with Docker Compose** (recommended -- brings up the whole pipeline, including a fresh nginx-served build of the UI):
+
+```bash
+docker compose up -d --build
+```
+
+Then open **http://localhost:8089/**.
+
+**Run it standalone against an already-running backend** (e.g. one started with `uvicorn src.dashboard.api:app --reload` per the section above):
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Then open the URL Vite prints (typically **http://localhost:5173/**) -- `vite.config.ts` proxies `/api` and `/ws` to `localhost:8000` in dev, so no extra configuration is needed.
 
 ## Project structure
 
@@ -173,7 +198,20 @@ uvicorn src.dashboard.api:app --reload
 │   ├── test_stream_processor_unit.py        # process_event/heatmap/webhook, no broker needed
 │   ├── test_stream_processor_integration.py # real Mosquitto broker, end to end
 │   └── test_kafka_consumer.py               # real Kafka broker, skips if unavailable
-└── .github/workflows/ci.yml    # lint + test, with a real Mosquitto service container
+├── frontend/                    # React + TypeScript live dashboard (see "Live Dashboard" above)
+│   ├── Dockerfile               # multi-stage build: node build -> nginx serve
+│   ├── nginx.conf                # serves the built app, proxies /api and /ws to `dashboard`
+│   ├── vite.config.ts            # dev-mode proxy for /api and /ws to localhost:8000
+│   └── src/
+│       ├── types.ts              # TypeScript types matching the backend's WS/REST snapshot shape
+│       ├── useDashboardSocket.ts # WS /ws client hook (reconnect-with-backoff)
+│       ├── App.tsx               # per-zone cards, alert banner, alert log
+│       └── ZoneCard.tsx          # one zone's stats + recharts occupancy line chart
+├── docs/
+│   └── screenshots/
+│       └── occupancy-dashboard.png
+└── .github/workflows/ci.yml    # Python job (lint + test, real Mosquitto service container)
+                                 # + a separate frontend job (tsc --noEmit + npm run build)
 ```
 
 ## Testing

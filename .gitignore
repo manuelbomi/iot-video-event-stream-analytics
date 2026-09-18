@@ -27,3 +27,8 @@ Thumbs.db
 # Env files
 .env
 .env.*
+
+# Frontend (frontend/, Vite + React + TypeScript dashboard UI)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
