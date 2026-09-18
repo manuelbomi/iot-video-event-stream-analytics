@@ -1,0 +1,63 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: iot-video-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/#' -C 1 -W 3 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dashboard:
+    build: .
+    container_name: iot-video-dashboard
+    command: ["uvicorn", "src.dashboard.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8088:8000"
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  processor:
+    build: .
+    container_name: iot-video-processor
+    command: ["python", "-m", "src.processor.stream_processor"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      # Point alerts at the dashboard's webhook receiver so the full
+      # "detect -> push -> display" path is wired up end to end.
+      ALERT_WEBHOOK_URL: "http://dashboard:8000/alerts"
+      ANOMALY_THRESHOLD: "3.0"
+      ANOMALY_MIN_SAMPLES: "10"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      dashboard:
+        condition: service_started
+
+  producer:
+    build: .
+    container_name: iot-video-producer
+    command:
+      [
+        "python", "-m", "src.producer.simulate_events",
+        "--host", "mosquitto",
+        "--rate", "2",
+        "--zones", "zone-1,zone-2,zone-3",
+        "--spike-zone", "zone-2",
+        "--spike-at", "30",
+        "--spike-magnitude", "8",
+      ]
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      processor:
+        condition: service_started

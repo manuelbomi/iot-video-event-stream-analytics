@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      mosquitto:
+        image: eclipse-mosquitto:2
+        ports:
+          - 1883:1883
+        # The stock eclipse-mosquitto image needs a config that allows
+        # anonymous connections and a listener before it will accept
+        # client connections; the default config (no listener defined)
+        # refuses everything. We can't easily mount a config file into a
+        # `services:` container, so we pass one via command args instead.
+        options: >-
+          --health-cmd "mosquitto_sub -h localhost -t '$SYS/#' -C 1 -W 3 || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MQTT_TEST_HOST: localhost
+      MQTT_TEST_PORT: 1883
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Configure Mosquitto for anonymous access
+        run: |
+          docker ps --filter "ancestor=eclipse-mosquitto:2" --format "{{.ID}}" | while read -r cid; do
+            docker exec "$cid" sh -c 'printf "listener 1883\nallow_anonymous true\n" > /mosquitto/config/mosquitto.conf'
+            docker restart "$cid"
+          done
+          # Give the broker a moment to come back up with the new config.
+          sleep 3
+
+      - name: Wait for Mosquitto to accept connections
+        run: |
+          for i in $(seq 1 20); do
+            if (echo > /dev/tcp/127.0.0.1/1883) >/dev/null 2>&1; then
+              echo "Mosquitto is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Mosquitto never came up" >&2
+          exit 1
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Run tests
+        run: pytest -v
